@@ -1,0 +1,2025 @@
+---
+title: "Statistical Modelling of Interstate Traffic Volume"
+subtitle: "Industry Innovation Consulting Challenge — R/Quarto Consultancy Notebook"
+author:
+  - "Group Name: ____________________"
+  - "Members: ____________________"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    embed-resources: true
+bibliography: traffic_references.bib
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# How to use this notebook
+
+This notebook is designed around the IT3081 Statistical Modelling consultancy assignment. It covers the full analytical workflow from problem definition through descriptive analysis, statistical inference, predictive modelling, experimental design, PCA, Bayesian methods, critical discussion of future time-series applications, innovation proposal, expert validation, and final recommendations.
+
+Place the following file in the same folder as this notebook:
+
+`Metro_Interstate_Traffic_Volume.csv.gz`
+
+Then open this `.qmd` file in RStudio and click **Render**.
+
+> **Important:** Task 11 requires genuine industry-expert validation. This notebook provides the structure and questions, but no expert feedback is fabricated. Replace the placeholders only after the real consultation.
+
+# 0. Reproducible setup
+
+## 0.1 Install/load packages
+
+```{r}
+required_packages <- c(
+  "tidyverse",
+  "lubridate",
+  "broom",
+  "glmnet",
+  "knitr",
+  "scales"
+)
+
+to_install <- required_packages[
+  !required_packages %in% rownames(installed.packages())
+]
+
+if (length(to_install) > 0) {
+  install.packages(to_install)
+}
+
+invisible(
+  lapply(required_packages, library, character.only = TRUE)
+)
+
+set.seed(3081)
+```
+
+## 0.2 Helper functions
+
+```{r}
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted), na.rm = TRUE)
+}
+
+r_squared <- function(actual, predicted) {
+  1 - sum((actual - predicted)^2, na.rm = TRUE) /
+    sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
+}
+
+metric_row <- function(model_name, actual, predicted) {
+  tibble(
+    Model = model_name,
+    RMSE = rmse(actual, predicted),
+    MAE = mae(actual, predicted),
+    R2 = r_squared(actual, predicted)
+  )
+}
+
+fmt_p <- function(p) {
+  ifelse(p < 0.001, "< 0.001", sprintf("%.4f", p))
+}
+```
+
+# 1. Task 1 — Industry Problem and Consultancy Objectives
+
+## 1.1 Industry and organizational context
+
+**Industry:** Transportation / highway traffic management.
+
+**Consultancy context:** A highway transportation authority responsible for planning and managing traffic on a major interstate corridor requires evidence-based insight into when traffic demand is highest, which external factors are associated with traffic volume, and how historical traffic and weather information can support future operational planning.
+
+The selected dataset represents westbound Interstate 94 traffic at Minnesota Department of Transportation ATR station 301, located approximately midway between Minneapolis and St. Paul. The UCI repository classifies the dataset as multivariate, sequential, and time-series data and identifies `traffic_volume` as the regression target [@hogue2019].
+
+## 1.2 Business problem
+
+Traffic volume changes across the hour of the day, day of the week, month, holidays, and weather conditions. Without a statistically defensible understanding of these patterns, transportation authorities may have difficulty planning congestion-management activities, road works, staffing, incident response, and other operational resources.
+
+The consultancy problem is therefore:
+
+> **How can historical traffic, weather, calendar, and temporal information be used to explain and predict interstate traffic volume and support practical traffic-management decisions?**
+
+## 1.3 Stakeholders
+
+- Highway and transportation authorities
+- Traffic-management centres
+- Road maintenance teams
+- Emergency-response services
+- Transport planners
+- Commuters and other road users
+
+## 1.4 Consultancy aim
+
+> **To investigate temporal, meteorological, and calendar-related factors associated with interstate traffic volume and develop statistically sound predictive models that can support evidence-based traffic-management and resource-planning decisions.**
+
+## 1.5 Consultancy objectives
+
+1. Examine the distribution and temporal patterns of interstate traffic volume using descriptive statistics and visualization.
+2. Test whether traffic volume differs significantly across important operating conditions such as weekdays/weekends, holidays/non-holidays, and weather categories.
+3. Identify temporal, weather, and calendar factors associated with traffic volume.
+4. Develop and compare Multiple Linear Regression, Ridge, LASSO, and Elastic Net models for traffic-volume prediction.
+5. Critically evaluate experimental design, PCA, Bayesian methods, and potential future uses of time-series methods in transportation decision-making.
+6. Propose a practical traffic-volume decision-support framework for organizational use.
+
+## 1.6 Research questions
+
+- **RQ1:** What temporal patterns exist in interstate traffic volume across hours, days, months, and seasons?
+- **RQ2:** Does average traffic volume differ significantly between important operating conditions?
+- **RQ3:** Which temporal, weather, and calendar variables are associated with traffic volume?
+- **RQ4:** How effectively can Multiple Linear Regression, Ridge, LASSO, and Elastic Net predict traffic volume?
+- **RQ5:** What trade-offs exist between predictive performance and interpretability for organizational decision-making?
+
+# 2. Task 2 — Research Landscape and Research Gap
+
+## 2.1 Research landscape
+
+Traffic forecasting has evolved from classical statistical time-series methods to regularized regression, machine learning, deep learning, and more recent explainable forecasting approaches.
+
+Classical work used ARIMA and ARIMAX to capture temporal dependence in traffic flow [@williams2001; @smith2002]. Neural-network approaches were subsequently developed to represent more complex nonlinear traffic dynamics [@vlahogianni2005]. Weather-sensitive traffic studies have also demonstrated that cold, snow, rainfall, temporal factors, and holidays can affect traffic patterns, although effects vary by context [@datla2008; @lin2022].
+
+Regularization methods are relevant because traffic models often contain correlated time and weather predictors. Adaptive LASSO has been used for real-time traffic forecasting [@kamarianakis2012], while regularized kernel methods and LASSO-based ensemble models have also been proposed [@haworth2014; @chen2019].
+
+Recent reviews document substantial growth in machine-learning and deep-learning traffic forecasting, including CNN, LSTM, hybrid, graph-based, and ensemble approaches [@razali2021; @kumar2021; @kashyap2022; @medina2022; @shaygan2022]. At the same time, recent work increasingly emphasizes interpretability because highly complex models may produce accurate forecasts without providing transparent explanations for decision-makers [@kwak2024; @guo2024].
+
+PCA and related dimensionality-reduction methods have also been used in traffic forecasting, particularly when many correlated traffic inputs are available [@qin2024].
+
+Bayesian combination approaches demonstrate another way to incorporate uncertainty and combine multiple forecasts [@wang2014].
+
+## 2.2 Literature matrix
+
+```{r}
+literature_matrix <- tribble(
+  ~Study, ~Year, ~Approach, ~Relevance_to_project,
+  "Williams", 2001, "ARIMAX", "Shows value of exogenous variables in traffic time-series forecasting.",
+  "Smith, Williams & Oswald", 2002, "Seasonal ARIMA / nonparametric regression", "Supports time-series benchmarking.",
+  "Vlahogianni, Karlaftis & Golias", 2005, "Neural networks", "Shows evolution toward nonlinear predictive models.",
+  "Datla & Sharma", 2008, "Regression with weather", "Supports weather and temporal predictors.",
+  "Kamarianakis, Shen & Wynter", 2012, "Adaptive LASSO", "Supports regularization and variable selection.",
+  "Haworth et al.", 2014, "Kernel ridge regression", "Supports regularized regression for traffic prediction.",
+  "Wang, Deng & Guo", 2014, "Bayesian forecast combination", "Supports Bayesian uncertainty/combination discussion.",
+  "Chen et al.", 2019, "LASSO + gradient boosting", "Supports feature selection and abnormal-condition forecasting.",
+  "Razali et al.", 2021, "Systematic ML/DL review", "Summarizes current traffic prediction techniques and gaps.",
+  "Kumar & Raubal", 2021, "Deep-learning congestion review", "Highlights deployment and congestion challenges.",
+  "Kashyap et al.", 2022, "Deep-learning review", "Summarizes CNN/RNN/LSTM and hybrid traffic models.",
+  "Medina-Salgado et al.", 2022, "Urban traffic prediction review", "Compares computational forecasting approaches.",
+  "Shaygan et al.", 2022, "AI traffic prediction review", "Highlights recent AI methods and open challenges.",
+  "Lin et al.", 2022, "Regression + RF + ridge fusion", "Direct evidence for weather, time and festival effects.",
+  "Qin, Wu & Hu", 2024, "Functional PCA ensemble", "Supports PCA discussion in high-dimensional traffic settings.",
+  "Kwak, Li & Geroliminis", 2024, "Interpretable neural forecasting", "Shows growing focus on interpretability.",
+  "Guo et al.", 2024, "Explainable traffic forecasting", "Supports accuracy-versus-explainability discussion."
+)
+
+knitr::kable(literature_matrix)
+```
+
+## 2.3 Critical comparison and research gap
+
+The literature shows that increasingly complex machine-learning and deep-learning models can capture nonlinear and spatiotemporal traffic relationships, but higher model complexity can reduce transparency and increase implementation burden. This matters in a consultancy setting because management requires not only predictions but also interpretable evidence explaining when and why traffic changes.
+
+The present dataset represents a **single traffic-counting location**, so methods designed for large sensor networks may be unnecessarily complex. A useful gap for this project is therefore to compare conventional and regularized statistical models while preserving temporal awareness and organizational interpretability.
+
+A second issue is that weather effects are context-dependent. Prior studies show that weather can influence traffic volume, but the magnitude and direction depend on road type, timing, geography, and event conditions [@datla2008; @lin2022]. Therefore, these effects must be tested rather than assumed for this corridor.
+
+# 3. Task 3 — Dataset Understanding and Data Preparation
+
+## 3.1 Import the raw data
+
+We deliberately import `date_time` as character and parse it once. This avoids applying `ymd_hms()` to a column that may already have been converted by `read_csv()`.
+
+```{r}
+traffic_raw <- read_csv(
+  "Metro_Interstate_Traffic_Volume.csv.gz",
+  col_types = cols(
+    date_time = col_character()
+  )
+)
+
+traffic_raw <- traffic_raw %>%
+  mutate(
+    holiday = replace_na(holiday, "None"),
+    date_time = ymd_hms(date_time, tz = "UTC")
+  )
+```
+
+> The source timestamps are documented by UCI as local CST clock times. Here `UTC` is used only as a neutral R timezone label so that the recorded hour is not shifted during parsing.
+
+## 3.2 Initial structure
+
+```{r}
+dim(traffic_raw)
+names(traffic_raw)
+glimpse(traffic_raw)
+head(traffic_raw)
+```
+
+```{r}
+dataset_summary <- tibble(
+  Metric = c(
+    "Rows",
+    "Columns",
+    "Earliest timestamp",
+    "Latest timestamp",
+    "Unique timestamps",
+    "Missing date_time values"
+  ),
+  Value = c(
+    nrow(traffic_raw),
+    ncol(traffic_raw),
+    as.character(min(traffic_raw$date_time, na.rm = TRUE)),
+    as.character(max(traffic_raw$date_time, na.rm = TRUE)),
+    n_distinct(traffic_raw$date_time),
+    sum(is.na(traffic_raw$date_time))
+  )
+)
+
+knitr::kable(dataset_summary)
+```
+
+## 3.3 Variable descriptions
+
+```{r}
+variable_dictionary <- tribble(
+  ~Variable, ~Role, ~Description,
+  "holiday", "Predictor", "Named US/regional holiday, otherwise None",
+  "temp", "Predictor", "Average hourly temperature in Kelvin",
+  "rain_1h", "Predictor", "Rainfall in the hour (mm)",
+  "snow_1h", "Predictor", "Snowfall in the hour (mm)",
+  "clouds_all", "Predictor", "Cloud cover percentage",
+  "weather_main", "Predictor", "Broad weather category",
+  "weather_description", "Predictor", "Detailed weather description",
+  "date_time", "Predictor / index", "Recorded hour",
+  "traffic_volume", "Target", "Hourly westbound traffic count"
+)
+
+knitr::kable(variable_dictionary)
+```
+
+## 3.4 Missing-value assessment
+
+```{r}
+missing_summary <- traffic_raw %>%
+  summarise(
+    across(everything(), ~ sum(is.na(.)))
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = "Variable",
+    values_to = "Missing"
+  )
+
+knitr::kable(missing_summary)
+```
+
+`"None"` in the holiday field means **no listed holiday**; it is not treated as missing.
+
+## 3.5 Duplicate/repeated timestamp investigation
+
+A key issue is that some hours occur multiple times because more than one weather description may be attached to the same traffic count.
+
+```{r}
+timestamp_counts <- traffic_raw %>%
+  count(date_time, name = "rows_per_timestamp")
+
+duplicate_timestamp_summary <- timestamp_counts %>%
+  summarise(
+    total_unique_timestamps = n(),
+    timestamps_with_multiple_rows = sum(rows_per_timestamp > 1),
+    extra_rows_beyond_one_per_hour = sum(rows_per_timestamp - 1),
+    maximum_rows_for_one_timestamp = max(rows_per_timestamp)
+  )
+
+knitr::kable(duplicate_timestamp_summary)
+```
+
+Example repeated timestamps:
+
+```{r}
+traffic_raw %>%
+  semi_join(
+    timestamp_counts %>% filter(rows_per_timestamp > 1),
+    by = "date_time"
+  ) %>%
+  arrange(date_time) %>%
+  select(
+    date_time, traffic_volume, temp, rain_1h,
+    clouds_all, weather_main, weather_description
+  ) %>%
+  slice_head(n = 20)
+```
+
+Check whether traffic volume itself changes within repeated timestamps:
+
+```{r}
+traffic_raw %>%
+  group_by(date_time) %>%
+  summarise(
+    n_traffic_values = n_distinct(traffic_volume),
+    .groups = "drop"
+  ) %>%
+  count(n_traffic_values)
+```
+
+### Cleaning decision
+
+For modelling, each timestamp should represent one hourly traffic observation. Rather than arbitrarily keeping the first weather label, we aggregate to **one row per timestamp**, preserve numerical weather information, and create binary weather indicators showing whether each weather type occurred during the hour.
+
+```{r}
+traffic_hourly <- traffic_raw %>%
+  group_by(date_time) %>%
+  summarise(
+    holiday = first(holiday),
+    traffic_volume = first(traffic_volume),
+    temp = mean(temp, na.rm = TRUE),
+    rain_1h = max(rain_1h, na.rm = TRUE),
+    snow_1h = max(snow_1h, na.rm = TRUE),
+    clouds_all = mean(clouds_all, na.rm = TRUE),
+
+    has_rain = any(weather_main %in% c("Rain", "Drizzle")),
+    has_snow = any(weather_main == "Snow"),
+    has_thunderstorm = any(weather_main == "Thunderstorm"),
+    has_fog_mist_haze = any(weather_main %in% c("Mist", "Fog", "Haze", "Smoke")),
+    has_clouds = any(weather_main == "Clouds"),
+    has_clear = any(weather_main == "Clear"),
+    has_other_weather = any(weather_main %in% c("Squall")),
+
+    weather_types = paste(sort(unique(weather_main)), collapse = "; "),
+    weather_description_all = paste(
+      sort(unique(weather_description)),
+      collapse = "; "
+    ),
+    number_of_weather_types = n_distinct(weather_main),
+    .groups = "drop"
+  )
+```
+
+## 3.6 Holiday-date correction
+
+The raw holiday label appears only on the designated holiday observation rather than necessarily on every hour of that calendar date. For organizational interpretation we therefore identify holiday **dates** and flag every observed hour on those dates.
+
+```{r}
+holiday_dates <- traffic_raw %>%
+  filter(holiday != "None") %>%
+  transmute(date = as.Date(date_time)) %>%
+  distinct()
+
+traffic_hourly <- traffic_hourly %>%
+  mutate(
+    date = as.Date(date_time),
+    holiday_flag = date %in% holiday_dates$date
+  )
+```
+
+## 3.7 Feature engineering
+
+```{r}
+traffic_hourly <- traffic_hourly %>%
+  mutate(
+    hour = hour(date_time),
+    weekday = wday(
+      date_time,
+      label = TRUE,
+      abbr = FALSE,
+      week_start = 1
+    ),
+    weekday = factor(
+      weekday,
+      levels = c(
+        "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday", "Sunday"
+      )
+    ),
+    weekend = if_else(
+      weekday %in% c("Saturday", "Sunday"),
+      "Weekend",
+      "Weekday"
+    ),
+    weekend = factor(weekend, levels = c("Weekday", "Weekend")),
+    month = month(date_time),
+    month_label = month(
+      date_time,
+      label = TRUE,
+      abbr = TRUE
+    ),
+    year = year(date_time),
+    season = case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5) ~ "Spring",
+      month %in% c(6, 7, 8) ~ "Summer",
+      TRUE ~ "Autumn"
+    ),
+    season = factor(
+      season,
+      levels = c("Winter", "Spring", "Summer", "Autumn")
+    ),
+    weather_group = case_when(
+      has_thunderstorm ~ "Thunderstorm",
+      has_snow ~ "Snow",
+      has_rain ~ "Rain/Drizzle",
+      has_fog_mist_haze ~ "Fog/Mist/Haze",
+      has_clouds ~ "Clouds",
+      has_clear ~ "Clear",
+      TRUE ~ "Other"
+    ),
+    weather_group = factor(
+      weather_group,
+      levels = c(
+        "Clear", "Clouds", "Rain/Drizzle", "Snow",
+        "Fog/Mist/Haze", "Thunderstorm", "Other"
+      )
+    ),
+    peak_period = case_when(
+      hour %in% 6:9 ~ "AM peak",
+      hour %in% 15:18 ~ "PM peak",
+      TRUE ~ "Off-peak"
+    ),
+    peak_period = factor(
+      peak_period,
+      levels = c("Off-peak", "AM peak", "PM peak")
+    )
+  )
+```
+
+## 3.8 Numerical data-quality checks
+
+```{r}
+traffic_hourly %>%
+  select(
+    temp, rain_1h, snow_1h,
+    clouds_all, traffic_volume
+  ) %>%
+  summary()
+```
+
+### Suspicious temperature values
+
+```{r}
+traffic_hourly %>%
+  filter(temp < 200) %>%
+  select(date_time, temp, traffic_volume, weather_types)
+```
+
+Temperature values below 200 K are treated as implausible for this context and converted to missing rather than being allowed to influence modelling.
+
+### Extreme rainfall value
+
+```{r}
+traffic_hourly %>%
+  arrange(desc(rain_1h)) %>%
+  select(date_time, rain_1h, traffic_volume, weather_types) %>%
+  slice_head(n = 10)
+```
+
+A rainfall value above 500 mm in one hour is treated as an implausible data-quality anomaly in this dataset. The threshold is used only to isolate the extreme record rather than to remove ordinary heavy-rain events.
+
+### Zero traffic counts
+
+```{r}
+traffic_hourly %>%
+  filter(traffic_volume == 0) %>%
+  select(date_time, traffic_volume, weather_types)
+```
+
+Zero traffic counts are **retained** because the dataset alone does not establish whether they represent a closure, a sensor event, or genuine zero flow. Removing them without evidence would be arbitrary.
+
+## 3.9 Apply documented cleaning rules
+
+```{r}
+traffic_clean <- traffic_hourly %>%
+  mutate(
+    temp = if_else(temp < 200, NA_real_, temp),
+    temp_c = temp - 273.15,
+    rain_1h = if_else(rain_1h > 500, NA_real_, rain_1h)
+  )
+```
+
+For predictive modelling, only observations with complete modelling predictors are retained:
+
+```{r}
+traffic_model <- traffic_clean %>%
+  drop_na(
+    traffic_volume, temp_c, rain_1h, snow_1h,
+    clouds_all, hour, weekday, month,
+    holiday_flag, weather_group
+  ) %>%
+  arrange(date_time)
+```
+
+```{r}
+cleaning_summary <- tibble(
+  Stage = c(
+    "Raw rows",
+    "Unique hourly timestamps",
+    "Rows available for modelling"
+  ),
+  Rows = c(
+    nrow(traffic_raw),
+    nrow(traffic_hourly),
+    nrow(traffic_model)
+  )
+)
+
+knitr::kable(cleaning_summary)
+```
+
+# 4. Task 3 — Descriptive Analysis and Initial Insights
+
+## 4.1 Target-variable descriptive statistics
+
+```{r}
+traffic_stats <- traffic_model %>%
+  summarise(
+    N = n(),
+    Mean = mean(traffic_volume),
+    Median = median(traffic_volume),
+    SD = sd(traffic_volume),
+    Minimum = min(traffic_volume),
+    Q1 = quantile(traffic_volume, 0.25),
+    Q3 = quantile(traffic_volume, 0.75),
+    Maximum = max(traffic_volume)
+  )
+
+knitr::kable(traffic_stats, digits = 2)
+```
+
+## 4.2 Distribution of traffic volume
+
+```{r}
+ggplot(traffic_model, aes(x = traffic_volume)) +
+  geom_histogram(bins = 40) +
+  labs(
+    title = "Distribution of hourly traffic volume",
+    x = "Vehicles per hour",
+    y = "Number of observed hours"
+  ) +
+  theme_minimal()
+```
+
+## 4.3 Hour-of-day pattern
+
+```{r}
+hourly_profile <- traffic_model %>%
+  group_by(hour) %>%
+  summarise(
+    mean_traffic = mean(traffic_volume),
+    median_traffic = median(traffic_volume),
+    .groups = "drop"
+  )
+
+peak_hour_result <- hourly_profile %>%
+  slice_max(mean_traffic, n = 1, with_ties = FALSE)
+
+knitr::kable(hourly_profile, digits = 1)
+```
+
+```{r}
+ggplot(hourly_profile, aes(x = hour, y = mean_traffic)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Average traffic volume by hour of day",
+    x = "Hour",
+    y = "Average vehicles per hour"
+  ) +
+  theme_minimal()
+```
+
+## 4.4 Weekday pattern
+
+```{r}
+weekday_profile <- traffic_model %>%
+  group_by(weekday) %>%
+  summarise(
+    mean_traffic = mean(traffic_volume),
+    .groups = "drop"
+  )
+
+knitr::kable(weekday_profile, digits = 1)
+```
+
+```{r}
+ggplot(weekday_profile, aes(x = weekday, y = mean_traffic)) +
+  geom_col() +
+  labs(
+    title = "Average traffic volume by day of week",
+    x = NULL,
+    y = "Average vehicles per hour"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+```
+
+## 4.5 Weekday versus weekend
+
+```{r}
+weekend_profile <- traffic_model %>%
+  group_by(weekend) %>%
+  summarise(
+    mean_traffic = mean(traffic_volume),
+    median_traffic = median(traffic_volume),
+    .groups = "drop"
+  )
+
+knitr::kable(weekend_profile, digits = 1)
+```
+
+```{r}
+ggplot(traffic_model, aes(x = weekend, y = traffic_volume)) +
+  geom_boxplot(outlier.alpha = 0.15) +
+  labs(
+    title = "Traffic volume: weekdays versus weekends",
+    x = NULL,
+    y = "Vehicles per hour"
+  ) +
+  theme_minimal()
+```
+
+## 4.6 Monthly pattern
+
+```{r}
+monthly_profile <- traffic_model %>%
+  group_by(month, month_label) %>%
+  summarise(
+    mean_traffic = mean(traffic_volume),
+    .groups = "drop"
+  ) %>%
+  arrange(month)
+
+knitr::kable(monthly_profile, digits = 1)
+```
+
+```{r}
+ggplot(monthly_profile, aes(x = month, y = mean_traffic)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  scale_x_continuous(
+    breaks = 1:12,
+    labels = month.abb
+  ) +
+  labs(
+    title = "Average traffic volume by month",
+    x = "Month",
+    y = "Average vehicles per hour"
+  ) +
+  theme_minimal()
+```
+
+## 4.7 Seasonal pattern
+
+```{r}
+season_profile <- traffic_model %>%
+  group_by(season) %>%
+  summarise(
+    mean_traffic = mean(traffic_volume),
+    .groups = "drop"
+  )
+
+knitr::kable(season_profile, digits = 1)
+```
+
+## 4.8 Weather pattern
+
+```{r}
+weather_profile <- traffic_model %>%
+  group_by(weather_group) %>%
+  summarise(
+    observations = n(),
+    mean_traffic = mean(traffic_volume),
+    median_traffic = median(traffic_volume),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_traffic))
+
+knitr::kable(weather_profile, digits = 1)
+```
+
+```{r}
+ggplot(weather_profile, aes(x = reorder(weather_group, mean_traffic), y = mean_traffic)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Average traffic volume by weather group",
+    x = NULL,
+    y = "Average vehicles per hour"
+  ) +
+  theme_minimal()
+```
+
+## 4.9 Holiday pattern
+
+```{r}
+holiday_profile <- traffic_model %>%
+  group_by(holiday_flag) %>%
+  summarise(
+    observations = n(),
+    mean_traffic = mean(traffic_volume),
+    .groups = "drop"
+  )
+
+knitr::kable(holiday_profile, digits = 1)
+```
+
+## 4.10 Temperature relationship
+
+```{r}
+ggplot(
+  traffic_model,
+  aes(x = temp_c, y = traffic_volume)
+) +
+  geom_point(alpha = 0.08) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Traffic volume and temperature",
+    x = "Temperature (°C)",
+    y = "Vehicles per hour"
+  ) +
+  theme_minimal()
+```
+
+## 4.11 Initial business insights
+
+The descriptive results should be interpreted from an organizational perspective:
+
+- Identify the hour(s) with the highest average traffic demand.
+- Compare working-day and weekend demand.
+- Identify seasonal/monthly differences.
+- Examine whether severe weather is associated with lower or otherwise different traffic volume.
+- Examine whether holidays reduce normal commuter traffic.
+
+The highest average hourly traffic period in this dataset is identified programmatically as hour **`r peak_hour_result$hour`**, with an average of approximately **`r round(peak_hour_result$mean_traffic, 0)` vehicles per hour**.
+
+# 5. Task 4 — Statistical Inference
+
+Because hourly traffic observations are temporally related, inferential tests based on complete independence should be interpreted cautiously. For the weekday/weekend and holiday comparisons, daily means are used to reduce short-term hourly dependence. Weather comparisons remain observational rather than causal.
+
+## 5.1 Create daily analysis dataset
+
+```{r}
+daily_traffic <- traffic_model %>%
+  group_by(date) %>%
+  summarise(
+    mean_traffic = mean(traffic_volume),
+    weekend = first(weekend),
+    holiday_flag = first(holiday_flag),
+    .groups = "drop"
+  )
+```
+
+## 5.2 Hypothesis Test 1 — Weekday versus weekend mean traffic
+
+**Null hypothesis**
+
+\[
+H_0: \mu_{weekday} = \mu_{weekend}
+\]
+
+**Alternative hypothesis**
+
+\[
+H_1: \mu_{weekday} \neq \mu_{weekend}
+\]
+
+A Welch independent-samples t-test is used because equal variances are not assumed.
+
+```{r}
+weekend_ttest <- t.test(
+  mean_traffic ~ weekend,
+  data = daily_traffic,
+  var.equal = FALSE
+)
+
+weekend_ttest
+```
+
+```{r}
+weekend_test_tidy <- broom::tidy(weekend_ttest)
+knitr::kable(weekend_test_tidy, digits = 4)
+```
+
+Group means:
+
+```{r}
+daily_traffic %>%
+  group_by(weekend) %>%
+  summarise(
+    n_days = n(),
+    mean_daily_traffic = mean(mean_traffic),
+    sd_daily_traffic = sd(mean_traffic),
+    .groups = "drop"
+  ) %>%
+  knitr::kable(digits = 2)
+```
+
+**Decision:** Evaluate the p-value against \(\alpha = 0.05\). Statistical significance should be discussed together with the size of the mean difference, not p-value alone.
+
+## 5.3 Comparison of variances
+
+Traffic-volume variability may also differ between weekdays and weekends.
+
+**Null hypothesis:** the distributions have equal dispersion.
+
+The Fligner-Killeen test is used because it is robust to non-normality.
+
+```{r}
+variance_test <- fligner.test(
+  mean_traffic ~ weekend,
+  data = daily_traffic
+)
+
+variance_test
+```
+
+## 5.4 Hypothesis Test 2 — Holiday versus non-holiday daily traffic
+
+**Null hypothesis**
+
+\[
+H_0: \mu_{holiday} = \mu_{nonholiday}
+\]
+
+**Alternative hypothesis**
+
+\[
+H_1: \mu_{holiday} \neq \mu_{nonholiday}
+\]
+
+```{r}
+holiday_ttest <- t.test(
+  mean_traffic ~ holiday_flag,
+  data = daily_traffic,
+  var.equal = FALSE
+)
+
+holiday_ttest
+```
+
+```{r}
+broom::tidy(holiday_ttest) %>%
+  knitr::kable(digits = 4)
+```
+
+## 5.5 Hypothesis Test 3 — Traffic volume across weather categories
+
+**Null hypothesis**
+
+\[
+H_0: \mu_1 = \mu_2 = \cdots = \mu_k
+\]
+
+**Alternative hypothesis**
+
+At least one weather-group mean differs.
+
+First inspect group sizes:
+
+```{r}
+traffic_model %>%
+  count(weather_group) %>%
+  knitr::kable()
+```
+
+A standard one-way ANOVA is shown for assignment requirements:
+
+```{r}
+weather_anova <- aov(
+  traffic_volume ~ weather_group,
+  data = traffic_model
+)
+
+summary(weather_anova)
+```
+
+Because unequal variances may exist, also run Welch's one-way ANOVA:
+
+```{r}
+# Check the number of observations in each weather group
+weather_counts <- traffic_model %>%
+  count(weather_group)
+
+weather_counts %>%
+  knitr::kable()
+```
+```{r}
+# Keep only weather groups with at least 2 observations
+valid_weather_groups <- weather_counts %>%
+  filter(n >= 2) %>%
+  pull(weather_group)
+
+weather_test_data <- traffic_model %>%
+  filter(weather_group %in% valid_weather_groups) %>%
+  droplevels()
+```
+```{r}
+weather_welch <- oneway.test(
+  traffic_volume ~ weather_group,
+  data = weather_test_data,
+  var.equal = FALSE
+)
+
+weather_welch
+```
+
+Pairwise Welch comparisons with Holm adjustment:
+
+```{r}
+pairwise_weather <- pairwise.t.test(
+  x = weather_test_data$traffic_volume,
+  g = weather_test_data$weather_group,
+  p.adjust.method = "holm",
+  pool.sd = FALSE
+)
+
+pairwise_weather
+```
+
+### Practical interpretation
+
+Even if statistical significance is strong, the dataset is large and temporally structured. Management interpretation should emphasize **effect magnitude and operational meaning**, not only p-values.
+
+# 6. Task 5 — Predictive Statistical Modelling
+
+## 6.1 Modelling philosophy
+
+The main models are:
+
+1. Multiple Linear Regression — interpretable baseline.
+2. Ridge Regression — shrinks correlated coefficients.
+3. LASSO Regression — shrinkage plus variable selection.
+4. Elastic Net — combines Ridge and LASSO behavior.
+
+A chronological split is used instead of a random split so that model development uses earlier observations and final testing evaluates later observations.
+
+## 6.2 Chronological development, validation, and test periods
+
+- **Development:** before 1 January 2017
+- **Validation:** calendar year 2017
+- **Test:** 1 January 2018 onward
+
+```{r}
+traffic_model <- traffic_model %>%
+  mutate(
+    split_group = case_when(
+      date_time < ymd_hms("2017-01-01 00:00:00", tz = "UTC") ~ "Development",
+      date_time < ymd_hms("2018-01-01 00:00:00", tz = "UTC") ~ "Validation",
+      TRUE ~ "Test"
+    )
+  )
+
+traffic_model %>%
+  count(split_group) %>%
+  knitr::kable()
+```
+
+## 6.3 Predictor specification
+
+The four regression models use the same predictor structure, including an hour-by-weekday interaction. In R, `factor(hour) * weekday` includes hour, weekday, and their interaction terms. The historical-average baseline uses only hour and weekday.
+
+The regression predictors are:
+
+- temperature
+- rainfall
+- snowfall
+- cloud cover
+- hour of day
+- day of week
+- hour-by-weekday interaction, allowing each weekday its own hourly pattern
+- month
+- holiday flag
+- weather group
+- linear year trend
+
+```{r}
+model_formula <- traffic_volume ~
+  temp_c +
+  rain_1h +
+  snow_1h +
+  clouds_all +
+  factor(hour) * weekday +
+  factor(month) +
+  holiday_flag +
+  weather_group +
+  year
+```
+
+## 6.4 Multiple Linear Regression
+
+First fit OLS on development observations and evaluate it on the 2017 validation period. Then refit it on all observations before 2018 for coefficient reporting and diagnostics. The 2018 test evaluation is deferred until after model selection in Section 6.12.
+
+```{r}
+development_data <- traffic_model %>%
+  filter(split_group == "Development")
+
+validation_data <- traffic_model %>%
+  filter(split_group == "Validation")
+
+ols_development_model <- lm(
+  model_formula,
+  data = development_data
+)
+
+ols_validation_pred <- predict(
+  ols_development_model,
+  newdata = validation_data
+)
+
+ols_validation_metrics <- metric_row(
+  "Multiple Linear Regression",
+  validation_data$traffic_volume,
+  ols_validation_pred
+)
+
+train_all <- traffic_model %>%
+  filter(split_group != "Test")
+
+test_data <- traffic_model %>%
+  filter(split_group == "Test")
+
+ols_model <- lm(
+  model_formula,
+  data = train_all
+)
+
+summary(ols_model)
+```
+
+Coefficient table:
+
+```{r}
+ols_coefficients <- broom::tidy(
+  ols_model,
+  conf.int = TRUE
+)
+
+ols_coefficients %>%
+  arrange(p.value) %>%
+  slice_head(n = 25) %>%
+  knitr::kable(digits = 4)
+```
+
+### OLS validation performance
+
+```{r}
+knitr::kable(ols_validation_metrics, digits = 3)
+```
+
+### Historical-average baseline
+
+For a future Monday at 07:00, the baseline predicts the average of observed training Mondays at 07:00. Its validation profile uses development data only. Its final profile uses all pre-2018 data, and is evaluated on test data only after model selection. Every evaluated hour/weekday combination must have training support; missing support is surfaced rather than silently excluded.
+
+```{r}
+baseline_development_profile <- development_data %>%
+  group_by(hour, weekday) %>%
+  summarise(
+    baseline_prediction = mean(traffic_volume),
+    .groups = "drop"
+  )
+
+baseline_validation_pred <- validation_data %>%
+  left_join(baseline_development_profile, by = c("hour", "weekday")) %>%
+  pull(baseline_prediction)
+
+stopifnot(
+  length(baseline_validation_pred) == nrow(validation_data),
+  !anyNA(baseline_validation_pred)
+)
+
+baseline_validation_metrics <- metric_row(
+  "Hour and weekday historical mean",
+  validation_data$traffic_volume,
+  baseline_validation_pred
+)
+
+baseline_final_profile <- train_all %>%
+  group_by(hour, weekday) %>%
+  summarise(
+    baseline_prediction = mean(traffic_volume),
+    .groups = "drop"
+  )
+
+knitr::kable(baseline_validation_metrics, digits = 3)
+```
+
+## 6.5 OLS assumption diagnostics
+
+### Residuals versus fitted values
+
+```{r}
+ols_diag <- tibble(
+  fitted = fitted(ols_model),
+  residual = residuals(ols_model)
+)
+
+ggplot(ols_diag, aes(x = fitted, y = residual)) +
+  geom_point(alpha = 0.08) +
+  geom_hline(yintercept = 0) +
+  labs(
+    title = "OLS residuals versus fitted values",
+    x = "Fitted traffic volume",
+    y = "Residual"
+  ) +
+  theme_minimal()
+```
+
+### Q-Q plot
+
+```{r}
+ggplot(ols_diag, aes(sample = residual)) +
+  stat_qq(alpha = 0.15) +
+  stat_qq_line() +
+  labs(
+    title = "OLS residual Q-Q plot"
+  ) +
+  theme_minimal()
+```
+
+### Independence of observations
+
+Hourly observations from one road location can remain related after accounting for calendar and weather predictors. This limits the independence assumption behind conventional OLS coefficient standard errors and hypothesis tests. Daily aggregation reduces hourly dependence but does not guarantee independent observations. Coefficient intervals and p-values should therefore be interpreted cautiously. The chronological split evaluates prediction on later observations; it does not establish independence of model errors.
+
+### Numerical predictor correlations
+
+```{r}
+numeric_predictors <- train_all %>%
+  select(temp_c, rain_1h, snow_1h, clouds_all, year)
+
+cor(numeric_predictors, use = "complete.obs") %>%
+  round(3)
+```
+
+## 6.6 Poisson GLM suitability check
+
+Traffic volume is a count outcome, so a Poisson GLM is worth evaluating conceptually. However, Poisson regression assumes the conditional mean and variance are approximately equal.
+
+```{r}
+poisson_model <- glm(
+  model_formula,
+  data = train_all,
+  family = poisson(link = "log")
+)
+
+poisson_dispersion <- sum(
+  residuals(poisson_model, type = "pearson")^2
+) / df.residual(poisson_model)
+
+poisson_dispersion
+```
+
+If the dispersion statistic is far above 1, the Poisson variance assumption is violated. This would support using Gaussian/regularized regression as the principal comparison here, while a negative-binomial or other count model could be explored in future research.
+
+## 6.7 Prepare common design matrix for Ridge/LASSO/Elastic Net
+
+```{r}
+design_formula <- ~
+  temp_c +
+  rain_1h +
+  snow_1h +
+  clouds_all +
+  factor(hour) * weekday +
+  factor(month) +
+  holiday_flag +
+  weather_group +
+  year
+
+x_all <- model.matrix(
+  design_formula,
+  data = traffic_model
+)[, -1, drop = FALSE]
+
+y_all <- traffic_model$traffic_volume
+
+development_idx <- which(
+  traffic_model$split_group == "Development"
+)
+
+validation_idx <- which(
+  traffic_model$split_group == "Validation"
+)
+
+test_idx <- which(
+  traffic_model$split_group == "Test"
+)
+
+train_all_idx <- which(
+  traffic_model$split_group != "Test"
+)
+
+x_dev <- x_all[development_idx, , drop = FALSE]
+y_dev <- y_all[development_idx]
+
+x_val <- x_all[validation_idx, , drop = FALSE]
+y_val <- y_all[validation_idx]
+
+x_train_all <- x_all[train_all_idx, , drop = FALSE]
+y_train_all <- y_all[train_all_idx]
+
+x_test <- x_all[test_idx, , drop = FALSE]
+y_test <- y_all[test_idx]
+```
+
+## 6.8 Function for chronological lambda selection
+
+Hyperparameters are selected using the 2017 validation period. A common penalty grid from 10,000 to 0.0001 explores strong through almost unpenalized fits. OLS provides the unpenalized comparison. The tuning output identifies choices at a search boundary. The path stopping control is restored when the function returns.
+
+A lower-bound choice means validation prefers the weakest shrinkage in the grid. Compare its result with OLS before interpreting the models as different: an almost unpenalized regularized fit may perform essentially identically to OLS.
+
+```{r}
+lambda_grid <- 10^seq(4, -4, length.out = 160)
+
+select_glmnet_lambda <- function(alpha_value) {
+
+  previous_control <- glmnet.control()
+  on.exit(do.call(glmnet.control, previous_control), add = TRUE)
+  glmnet.control(fdev = 0, devmax = 1)
+
+  path_model <- glmnet(
+    x = x_dev,
+    y = y_dev,
+    alpha = alpha_value,
+    lambda = lambda_grid,
+    standardize = TRUE,
+    thresh = 1e-9
+  )
+
+  stopifnot(length(path_model$lambda) == length(lambda_grid))
+
+  validation_predictions <- predict(
+    path_model,
+    newx = x_val
+  )
+
+  validation_rmse <- apply(
+    validation_predictions,
+    2,
+    function(pred) rmse(y_val, pred)
+  )
+
+  best_index <- which.min(validation_rmse)
+
+  tibble(
+    alpha = alpha_value,
+    lambda = path_model$lambda[best_index],
+    validation_RMSE = validation_rmse[best_index],
+    Search_boundary = case_when(
+      best_index == 1 ~ "Upper",
+      best_index == length(path_model$lambda) ~ "Lower",
+      TRUE ~ "Interior"
+    ),
+    Lambdas_evaluated = length(path_model$lambda)
+  )
+}
+```
+
+## 6.9 Ridge Regression
+
+```{r}
+ridge_tuning <- select_glmnet_lambda(0)
+ridge_tuning
+```
+
+```{r}
+ridge_model <- glmnet(
+  x = x_train_all,
+  y = y_train_all,
+  alpha = 0,
+  lambda = ridge_tuning$lambda,
+  standardize = TRUE,
+  thresh = 1e-9
+)
+```
+
+## 6.10 LASSO Regression
+
+```{r}
+lasso_tuning <- select_glmnet_lambda(1)
+lasso_tuning
+```
+
+```{r}
+lasso_model <- glmnet(
+  x = x_train_all,
+  y = y_train_all,
+  alpha = 1,
+  lambda = lasso_tuning$lambda,
+  standardize = TRUE,
+  thresh = 1e-9
+)
+```
+
+Number of non-zero LASSO coefficients:
+
+```{r}
+lasso_coef <- coef(
+  lasso_model,
+  s = lasso_tuning$lambda
+)
+
+sum(as.vector(lasso_coef) != 0) - 1
+```
+
+Selected LASSO terms:
+
+```{r}
+lasso_selected <- tibble(
+  term = rownames(as.matrix(lasso_coef)),
+  coefficient = as.numeric(lasso_coef)
+) %>%
+  filter(
+    coefficient != 0,
+    term != "(Intercept)"
+  ) %>%
+  arrange(desc(abs(coefficient)))
+
+knitr::kable(lasso_selected, digits = 4)
+```
+
+## 6.11 Elastic Net Regression
+
+Tune several alpha values using the chronological validation set.
+
+```{r}
+elastic_alpha_grid <- c(0.25, 0.50, 0.75)
+
+elastic_tuning <- map_dfr(
+  elastic_alpha_grid,
+  select_glmnet_lambda
+) %>%
+  arrange(validation_RMSE)
+
+knitr::kable(elastic_tuning, digits = 5)
+```
+
+```{r}
+best_elastic <- elastic_tuning %>%
+  slice(1)
+
+elastic_model <- glmnet(
+  x = x_train_all,
+  y = y_train_all,
+  alpha = best_elastic$alpha,
+  lambda = best_elastic$lambda,
+  standardize = TRUE,
+  thresh = 1e-9
+)
+```
+
+## 6.12 Validation-based selection and final test evaluation
+
+### Select the model using 2017 validation results
+
+Compare the four regression candidates and the historical-average baseline using predictions from models fitted only on development data. Choose the candidate with the lowest validation RMSE before examining test errors. The baseline remains eligible if it outperforms the regression models. An exact tie is resolved by model name for reproducibility.
+
+```{r}
+validation_performance <- bind_rows(
+  ols_validation_metrics %>%
+    transmute(Model, validation_RMSE = RMSE),
+  ridge_tuning %>%
+    transmute(Model = "Ridge Regression", validation_RMSE),
+  lasso_tuning %>%
+    transmute(Model = "LASSO Regression", validation_RMSE),
+  best_elastic %>%
+    transmute(Model = "Elastic Net Regression", validation_RMSE),
+  baseline_validation_metrics %>%
+    transmute(Model, validation_RMSE = RMSE)
+) %>%
+  arrange(validation_RMSE, Model)
+
+selected_model <- validation_performance %>%
+  slice(1)
+
+knitr::kable(validation_performance, digits = 3)
+selected_model
+```
+
+The selected model is **`r selected_model$Model`**, with a 2017 validation RMSE of **`r round(selected_model$validation_RMSE, 3)` vehicles per hour**. All candidates have been refitted on development plus validation data using their selected settings.
+
+### Evaluate the frozen choice on the 2018 test period
+
+The table also reports the other candidates for the assignment comparison. Test scores do not change the validation-based selection. Because 2018 results were already inspected during project review, this is a retrospective model comparison. Further performance confirmation should use rolling chronological validation and a fresh holdout when available.
+
+```{r}
+ols_pred <- predict(
+  ols_model,
+  newdata = test_data
+)
+
+ols_metrics <- metric_row(
+  "Multiple Linear Regression",
+  test_data$traffic_volume,
+  ols_pred
+)
+
+ridge_pred <- as.numeric(
+  predict(
+    ridge_model,
+    newx = x_test,
+    s = ridge_tuning$lambda
+  )
+)
+
+ridge_metrics <- metric_row(
+  "Ridge Regression",
+  y_test,
+  ridge_pred
+)
+
+lasso_pred <- as.numeric(
+  predict(
+    lasso_model,
+    newx = x_test,
+    s = lasso_tuning$lambda
+  )
+)
+
+lasso_metrics <- metric_row(
+  "LASSO Regression",
+  y_test,
+  lasso_pred
+)
+
+elastic_pred <- as.numeric(
+  predict(
+    elastic_model,
+    newx = x_test,
+    s = best_elastic$lambda
+  )
+)
+
+elastic_metrics <- metric_row(
+  "Elastic Net Regression",
+  y_test,
+  elastic_pred
+)
+
+baseline_test_pred <- test_data %>%
+  left_join(baseline_final_profile, by = c("hour", "weekday")) %>%
+  pull(baseline_prediction)
+
+stopifnot(
+  length(baseline_test_pred) == nrow(test_data),
+  !anyNA(baseline_test_pred)
+)
+
+baseline_metrics <- metric_row(
+  "Hour and weekday historical mean",
+  test_data$traffic_volume,
+  baseline_test_pred
+)
+
+model_performance <- bind_rows(
+  ols_metrics,
+  ridge_metrics,
+  lasso_metrics,
+  elastic_metrics,
+  baseline_metrics
+) %>%
+  mutate(Selected_using_validation = Model == selected_model$Model) %>%
+  arrange(RMSE)
+
+knitr::kable(model_performance, digits = 3)
+```
+
+```{r}
+ggplot(
+  model_performance,
+  aes(x = reorder(Model, RMSE), y = RMSE)
+) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "2018 test results after validation-based model selection",
+    x = NULL,
+    y = "RMSE"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+selected_model_test_performance <- model_performance %>%
+  filter(Selected_using_validation)
+
+knitr::kable(selected_model_test_performance, digits = 3)
+```
+
+### Interpretation framework
+
+The model selected using 2017 validation results is **`r selected_model$Model`**. After refitting on all pre-2018 observations, its 2018 test RMSE is **`r round(selected_model_test_performance$RMSE, 3)` vehicles per hour**, its MAE is **`r round(selected_model_test_performance$MAE, 3)` vehicles per hour**, and its R² is **`r round(selected_model_test_performance$R2, 4)`**. These test results evaluate the frozen choice; they are not used to select a different model.
+
+The Gaussian regression models can still produce negative traffic predictions. Review that behaviour before operational use. The baseline provides nonnegative predictions because it averages nonnegative training counts.
+
+However, model selection for organizational use should not be based on RMSE alone:
+
+- OLS has the greatest coefficient-level interpretability.
+- Ridge is useful where correlated predictors produce unstable OLS estimates.
+- LASSO can simplify the predictor set.
+- Elastic Net balances variable selection and grouped shrinkage.
+- Potential dependence between hourly observations limits conventional coefficient inference and is a consideration for future methodological work.
+
+# 7. Task 6 — Critical Evaluation of Experimental Design
+
+No experiment is conducted because the dataset is observational. However, future transportation interventions could be evaluated experimentally.
+
+## 7.1 Completely Randomized Design (CRD)
+
+A CRD could randomly assign comparable observation units to alternative interventions, for example:
+
+- different traveler-information messages,
+- different variable-message-sign strategies,
+- different lane-management instructions,
+- alternative maintenance scheduling messages.
+
+**Potential advantages**
+
+- Simple design and analysis.
+- Randomization reduces systematic allocation bias.
+- Direct causal interpretation is stronger than observational analysis if interference is controlled.
+
+**Limitations**
+
+- Road conditions differ strongly by time and location.
+- Spillover between treatment and control locations may violate independence.
+- Traffic-management interventions can have safety and operational constraints.
+- Random assignment may not be feasible during high-risk periods.
+
+## 7.2 Randomized Complete Block Design (RCBD)
+
+RCBD may be more suitable because traffic conditions are heterogeneous. Blocks could be formed by:
+
+- time of day,
+- weekday/weekend,
+- road segment,
+- baseline traffic level,
+- season,
+- weather regime.
+
+Within each block, interventions could be randomized.
+
+**Advantages**
+
+- Controls known nuisance variation.
+- Can improve precision relative to CRD.
+- Better aligned with the strong temporal structure of traffic data.
+
+**Limitations**
+
+- Requires appropriate blocks and sufficient units in each block.
+- Treatment spillovers remain possible.
+- Real-world traffic operations may restrict randomization.
+
+## 7.3 Consultancy conclusion on experimental design
+
+For future controlled interventions, **RCBD would generally be more defensible than a simple CRD** when strong temporal or location-based heterogeneity exists. However, feasibility and road safety must take priority over statistical convenience.
+
+# 8. Task 7 — PCA Evaluation
+
+## 8.1 Why evaluate PCA?
+
+PCA reduces correlated predictors into orthogonal components. It is most useful when a dataset contains many highly correlated numerical features.
+
+The present dataset contains relatively few original continuous weather variables, so PCA is **not automatically necessary**. Applying PCA could reduce interpretability because components are combinations of variables such as temperature, rain, snow, and cloud cover.
+
+## 8.2 Illustrative PCA
+
+PCA is performed only on continuous predictor information and does not include the target.
+
+Rain and snow are log-transformed because of strong skewness.
+
+```{r}
+pca_data <- traffic_model %>%
+  transmute(
+    temp_c = temp_c,
+    log_rain = log1p(rain_1h),
+    log_snow = log1p(snow_1h),
+    clouds_all = clouds_all
+  )
+
+pca_fit <- prcomp(
+  pca_data,
+  center = TRUE,
+  scale. = TRUE
+)
+
+summary(pca_fit)
+```
+
+```{r}
+pca_variance <- tibble(
+  Component = paste0(
+    "PC",
+    seq_along(pca_fit$sdev)
+  ),
+  Variance_Explained = (
+    pca_fit$sdev^2 /
+      sum(pca_fit$sdev^2)
+  ),
+  Cumulative_Variance = cumsum(
+    pca_fit$sdev^2 /
+      sum(pca_fit$sdev^2)
+  )
+)
+
+knitr::kable(
+  pca_variance,
+  digits = 4
+)
+```
+
+```{r}
+ggplot(
+  pca_variance,
+  aes(x = Component, y = Cumulative_Variance, group = 1)
+) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Cumulative variance explained by PCA",
+    x = "Principal component",
+    y = "Cumulative variance explained"
+  ) +
+  theme_minimal()
+```
+
+Loadings:
+
+```{r}
+pca_fit$rotation %>%
+  round(3)
+```
+
+## 8.3 PCA conclusion
+
+PCA has demonstrated value in higher-dimensional traffic forecasting settings [@qin2024]. For the present dataset, its main disadvantages are:
+
+- only a small number of continuous weather predictors exist;
+- principal components reduce direct managerial interpretation;
+- important categorical time/calendar effects are not naturally represented by conventional PCA;
+- regularized regression already addresses correlated predictors while retaining original features.
+
+Therefore, PCA is best treated as an **optional exploratory or future extension**, not the primary modelling approach for this dataset.
+
+# 9. Task 8 — Bayesian Statistical Methods
+
+## 9.1 Naïve Bayes
+
+Naïve Bayes is fundamentally a classification method. Because `traffic_volume` is a numerical count outcome, Naïve Bayes is **not directly appropriate** for the main regression target.
+
+It could be used only if management redefined the problem into categories such as:
+
+- low traffic,
+- moderate traffic,
+- high traffic/congestion.
+
+That would simplify the decision problem but discard information contained in the continuous traffic count.
+
+## 9.2 Bayesian regression
+
+Bayesian regression is much more relevant.
+
+A Bayesian traffic-volume model could estimate a posterior distribution for each coefficient rather than only a point estimate and confidence interval. This could help management answer questions such as:
+
+- What is the probability that rain reduces traffic by a practically meaningful amount?
+- How uncertain is the expected traffic volume for a future hour?
+- How strongly should new evidence update earlier assumptions?
+
+A hierarchical Bayesian model could also represent repeated patterns across:
+
+- hours,
+- weekdays,
+- months,
+- seasons,
+- locations if additional traffic sensors were later included.
+
+## 9.3 Bayesian decision-making
+
+Bayesian decision theory could combine posterior predictive probabilities with the operational costs of decisions.
+
+For example, missing a severe congestion period may be more costly than deploying additional traffic-management resources unnecessarily. Management could therefore choose an action based on expected loss rather than prediction error alone.
+
+Bayesian forecast combination has previously been applied to short-term traffic forecasting [@wang2014].
+
+## 9.4 Advantages
+
+- Direct uncertainty quantification.
+- Ability to incorporate prior/domain knowledge.
+- Natural sequential updating as new traffic data arrive.
+- Suitable foundation for probabilistic decisions.
+
+## 9.5 Limitations
+
+- Prior selection can influence conclusions.
+- More computationally demanding.
+- Requires specialist expertise.
+- Probabilistic outputs may require careful communication to managers.
+
+## 9.6 Bayesian conclusion
+
+Bayesian regression and Bayesian decision-making are potentially valuable extensions, especially when uncertainty is central to traffic-resource allocation. Naïve Bayes is less appropriate unless the numerical count target is reformulated as a classification problem.
+
+# 10. Task 9 — Critical Discussion of Time-Series Methods
+
+This section evaluates how time-series methods could support future traffic-management decisions. The implemented prediction comparison remains regression and a historical-average baseline. The dataset already contains historical hourly observations, making temporal methods relevant to discuss, but gaps and changing operating conditions would need to be addressed before a future application.
+
+## 10.1 Trend analysis
+
+Trend analysis could investigate whether average traffic demand changes over months or years. Such information could support capacity planning and long-term resource allocation. However, an apparent trend might reflect changes in sensor coverage, road works, travel habits, or the mix of recorded hours rather than a genuine change in demand. A future study should first establish comparable coverage and document roadway and sensor changes. The linear year predictor in the present regression is an association within that model, not proof of a persistent future trend.
+
+## 10.2 Seasonal analysis
+
+Traffic can exhibit daily commuting patterns, weekday/weekend differences, and annual or weather-related variation. The hour-by-weekday interaction in the current regression represents different calendar patterns through explanatory variables. A future time-series study could evaluate recurring patterns explicitly and assess whether they remain stable across years. Multiple seasonal periods can complicate model specification: hourly data may require both daily and weekly patterns, while a monthly series would lose the within-day information needed for operational staffing. Recent traffic-prediction reviews discuss complex temporal relationships and external influences such as weather and holidays [@kashyap2022].
+
+## 10.3 Forecasting
+
+Forecasting could estimate traffic several hours or days ahead, allowing managers to plan staffing, maintenance, and monitoring. The forecast horizon must match the decision: a next-hour operational decision differs from a monthly capacity-planning decision. Inputs must be available at prediction time. In particular, observed weather for a future hour would have to be replaced by a weather forecast or a documented scenario. A future evaluation should use chronological or rolling validation, suitable historical-average benchmarks, prediction intervals, and errors assessed by operational period. Uncertainty and the cost of missed high-demand periods matter alongside average prediction error.
+
+## 10.4 ARIMA modelling
+
+ARIMA could model dependence on earlier observations and earlier prediction errors, with differencing where appropriate to address changing levels. Seasonal ARIMA could represent a selected recurring period. A model incorporating external predictors, such as ARIMAX or dynamic regression, could combine calendar and weather information with a temporal error structure. Classical traffic studies provide foundations for these approaches [@williams2001; @smith2002]. Their potential advantages include transparent statistical structure and forecast uncertainty. Limitations include sensitivity to missing observations, assumptions about the stability of the process, and difficulty representing several seasonal periods and unusual incidents. Greater model complexity should be justified by validation and organizational needs, rather than assumed to improve practical decisions [@kashyap2022].
+
+## 10.5 Business applications and expected benefits
+
+Potential applications include planning staff for expected demand, scheduling discretionary maintenance during lower-demand periods, and identifying conditions requiring closer monitoring. Earlier visibility of demand could improve preparedness and resource use. These are proposed benefits rather than measured impacts from this consultancy. High vehicle counts alone do not establish congestion; an operational congestion warning would also require information such as speed, occupancy, or roadway capacity. Industry-expert feedback should establish which decisions, horizons, and error levels would be useful.
+
+## 10.6 Feasibility and consultancy position
+
+The available observations have missing hours and a long interval with no records. A future time-series application would require a complete calendar index, explicit coverage checks, and a justified treatment of missing observations. Missing periods should not be interpreted as zero traffic. Aggregation could simplify modelling, but it can obscure peak-hour behaviour and produce misleading averages when coverage changes. The single monitoring location and data ending in 2018 also limit transfer to current operations or other roads.
+
+Time-series methods are therefore a potential future extension after data-quality, coverage, and input-availability issues are resolved. For the present consultancy, the implemented regression comparison provides interpretable associations and a documented historical prediction assessment. Any future forecasting system should be evaluated against these benchmarks and reviewed with transport professionals.
+
+# 11. Task 10 — Industry Innovation Proposal
+
+## 11.1 Proposed solution
+
+### Traffic Volume Decision Support and Early Warning Framework
+
+The proposed solution converts the statistical analysis into an operational decision-support workflow.
+
+```{mermaid}
+flowchart LR
+    A[Traffic counts] --> D[Data quality and integration]
+    B[Weather data] --> D
+    C[Calendar and time data] --> D
+    D --> E[Feature engineering]
+    E --> F[Statistical prediction model]
+    F --> G[Expected traffic volume]
+    F --> H[Uncertainty / risk indicators]
+    G --> I[Decision-support dashboard]
+    H --> I
+    I --> J[Traffic operations]
+    I --> K[Maintenance planning]
+    I --> L[Resource allocation]
+    I --> M[Management review]
+    M --> D
+```
+
+## 11.2 Business need
+
+Management requires a repeatable way to convert historical traffic, weather, and calendar information into:
+
+- expected traffic demand,
+- identification of high-volume periods,
+- evidence for operational planning,
+- early warning of unusual expected conditions.
+
+## 11.3 Core components
+
+1. Automated traffic/weather data ingestion.
+2. Data-quality checks for missing, duplicated, or implausible observations.
+3. Feature engineering for hour, weekday, month, holidays, and weather.
+4. Validated statistical prediction model.
+5. Dashboard displaying expected volume and high-demand periods.
+6. Periodic model-performance monitoring and retraining.
+
+## 11.4 Expected benefits
+
+- More proactive traffic operations.
+- Better scheduling of road works.
+- Evidence-based allocation of staff/resources.
+- Transparent use of weather and calendar effects.
+- Repeatable monitoring of model accuracy.
+
+## 11.5 Required resources
+
+- Continued traffic-sensor access.
+- Reliable weather feed.
+- Data storage.
+- R/Python or equivalent analytical environment.
+- Dashboard platform.
+- Staff capable of model monitoring and interpretation.
+
+## 11.6 Implementation challenges
+
+- Sensor outages and missing hours.
+- Model drift.
+- Unexpected incidents not represented in the data.
+- Changes in traffic behavior after 2018.
+- Need for real-time weather forecasts rather than only observed weather.
+- Generalization beyond one monitoring location.
+
+# 12. Task 11 — Industry Expert Validation
+
+> **Mandatory real-world step:** Do not fabricate this section.
+
+## 12.1 Expert profile
+
+Complete after consultation:
+
+- **Expert role/title:** ______________________________
+- **Industry/organization:** ___________________________
+- **Years of relevant experience:** ____________________
+- **Consultation date:** ______________________________
+- **Method:** Interview / Teams / Zoom / email / form
+- **Evidence retained:** _______________________________
+
+## 12.2 Suggested expert questions
+
+1. Is traffic-volume prediction a practically relevant problem for transport operations?
+2. Are hour, weekday, holidays, and weather useful operational predictors?
+3. Which findings would matter most to traffic managers?
+4. Would an interpretable statistical model be useful even if a more complex model achieved slightly better accuracy?
+5. What level of prediction error would be operationally acceptable?
+6. What real-world variables are missing from this dataset?
+7. Is the proposed dashboard/decision-support framework feasible?
+8. What implementation barriers would you expect?
+9. What changes would you recommend to the proposed solution?
+10. What ethical, safety, or governance issues should be considered?
+
+## 12.3 Feedback summary template
+
+```{r}
+expert_feedback_template <- tribble(
+  ~Topic, ~Expert_feedback, ~Change_made_to_project,
+  "Problem relevance", "TO COMPLETE", "TO COMPLETE",
+  "Model practicality", "TO COMPLETE", "TO COMPLETE",
+  "Decision-support framework", "TO COMPLETE", "TO COMPLETE",
+  "Implementation feasibility", "TO COMPLETE", "TO COMPLETE",
+  "Risks / limitations", "TO COMPLETE", "TO COMPLETE"
+)
+
+knitr::kable(expert_feedback_template)
+```
+
+## 12.4 Evidence
+
+Insert or reference the permitted evidence here:
+
+- meeting minutes,
+- email,
+- feedback form,
+- screenshot,
+- interview summary.
+
+# 13. Task 12 — Final Consultancy Recommendations
+
+The final recommendations must combine:
+
+1. statistical evidence,
+2. published research,
+3. industry-expert feedback.
+
+Until Task 11 is genuinely completed, the following should be treated as **data/literature-based draft recommendations**.
+
+## 13.1 Strategic recommendations
+
+### Recommendation 1 — Use time-of-day patterns as the primary operational planning signal
+
+The descriptive analysis identifies strong systematic differences by hour. The highest average period occurs around hour **`r peak_hour_result$hour`** in this dataset.
+
+Management should align monitoring and operational readiness with recurring demand patterns rather than treating all hours equally.
+
+### Recommendation 2 — Deploy the selected model as decision support, not as an autonomous decision-maker
+
+The 2017 validation comparison selects **`r selected_model$Model`** from the four principal regression approaches and the historical-average baseline. After refitting on all pre-2018 observations, the selected model has a 2018 test RMSE of **`r round(selected_model_test_performance$RMSE, 3)` vehicles per hour**. This supports reporting its performance on a later period without selecting it using the test scores.
+
+However, predictions should support professional judgment because incidents, road works, sporting events, and other unobserved factors can create unexpected traffic patterns.
+
+### Recommendation 3 — Prioritize interpretability alongside prediction performance
+
+Recent traffic research increasingly addresses the trade-off between predictive accuracy and explainability [@kwak2024; @guo2024]. Management should therefore retain transparent explanations of important time, calendar, and weather effects when deploying any operational model.
+
+### Recommendation 4 — Introduce continuous model monitoring
+
+A model trained on 2012–2018 data should not be assumed to remain valid indefinitely.
+
+Monitor:
+
+- RMSE/MAE over time,
+- residual patterns,
+- changes in peak-hour behavior,
+- weather-response changes,
+- sensor/data-quality problems.
+
+### Recommendation 5 — Expand data coverage before generalizing the results
+
+The dataset represents one westbound I-94 counting station. Future work should incorporate additional sensors/road segments so that spatial variation can be evaluated.
+
+## 13.2 Operational recommendations
+
+- Use hourly demand patterns to schedule traffic-management resources.
+- Avoid planning discretionary road works during consistently high-volume periods where possible.
+- Include holiday and weather information when interpreting expected traffic volume.
+- Establish automated duplicate/missing/outlier checks before model scoring.
+- Retain a human review process for unusual predicted conditions.
+
+## 13.3 Risk management
+
+Key risks include:
+
+- sensor failure,
+- data drift,
+- unobserved incidents,
+- outdated model parameters,
+- overconfidence in point predictions,
+- inappropriate generalization to other road segments.
+
+Controls should include monitoring, retraining, audit logs, manual override, and clear documentation of model limitations.
+
+## 13.4 Ethical considerations
+
+The dataset contains aggregated traffic counts rather than individual traveler records, reducing direct privacy risk. Nevertheless:
+
+- operational decisions should not rely blindly on model outputs;
+- limitations and uncertainty should be transparent;
+- resource-allocation decisions should be periodically reviewed for unintended consequences;
+- additional data sources introduced later must be assessed for privacy and governance implications.
+
+## 13.5 Future research
+
+Potential extensions include:
+
+- hourly ARIMAX/dynamic regression,
+- multi-seasonal time-series models,
+- Bayesian regression with predictive intervals,
+- hierarchical models across multiple sensors,
+- incident/event data,
+- real-time weather forecasts,
+- additional roadway locations,
+- causal field experiments using blocked designs.
+
+# 14. Consultancy Conclusion
+
+This project combines descriptive analysis, inferential statistics, interpretable regression, regularization, and critical evaluation of future analytical methods to investigate interstate traffic demand.
+
+The key methodological principle is that **prediction accuracy alone is insufficient**. A useful organizational model must also be interpretable, validated chronologically, monitored over time, and connected to specific traffic-management decisions.
+
+The final presentation should translate the statistical evidence into a small number of clear management messages rather than reproducing all notebook output.
+
+# 15. Export key outputs
+
+```{r}
+write_csv(
+  validation_performance,
+  "validation_performance.csv"
+)
+
+write_csv(
+  selected_model_test_performance,
+  "selected_model_test_performance.csv"
+)
+
+write_csv(
+  traffic_model,
+  "traffic_clean_for_modelling.csv"
+)
+
+write_csv(
+  model_performance,
+  "model_performance.csv"
+)
+
+write_csv(
+  hourly_profile,
+  "hourly_traffic_profile.csv"
+)
+
+write_csv(
+  weather_profile,
+  "weather_traffic_profile.csv"
+)
+```
+
+# 16. Academic Integrity and AI Acknowledgement
+
+Complete this section according to your university's required wording.
+
+Suggested structure:
+
+> The dataset and all research literature are cited in the report. R was used for statistical analysis. Generative AI tools were used for [state the actual uses: e.g., code debugging, language editing, structuring]. All generated code, analysis, statistical interpretation, and references were reviewed and validated by the student group. The group remains responsible for the accuracy and originality of the submitted work.
+
+Do not claim activities that were not actually performed.
+
+# 17. Reproducibility Information
+
+```{r}
+sessionInfo()
+```
+
+# References
