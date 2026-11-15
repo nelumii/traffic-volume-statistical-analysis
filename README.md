@@ -22,6 +22,3 @@ This study examines hourly westbound Interstate 94 traffic in Minnesota (2012–
 
 ## Technologies
 R, Quarto, tidyverse, lubridate, broom, glmnet, ggplot2, statistical hypothesis testing, regression diagnostics.
-This was an academic **group** project, not an operational transport system. PCA was explored, not adopted in the main predictive model. Bayesian methods and ARIMA/time-series forecasting were discussed rather than implemented as production methods. Review group-member details and consultation evidence before publishing. Credit the UCI dataset and literature cited by the notebook. Add the project's actual contributors and your personal contributions below.
-
-**My contribution:** _[Specify only tasks you personally completed.]_
