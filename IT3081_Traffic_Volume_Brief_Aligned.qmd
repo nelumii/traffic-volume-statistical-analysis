@@ -1791,56 +1791,6 @@ Management requires a repeatable way to convert historical traffic, weather, and
 
 # 12. Task 11 — Industry Expert Validation
 
-> **Mandatory real-world step:** Do not fabricate this section.
-
-## 12.1 Expert profile
-
-Complete after consultation:
-
-- **Expert role/title:** ______________________________
-- **Industry/organization:** ___________________________
-- **Years of relevant experience:** ____________________
-- **Consultation date:** ______________________________
-- **Method:** Interview / Teams / Zoom / email / form
-- **Evidence retained:** _______________________________
-
-## 12.2 Suggested expert questions
-
-1. Is traffic-volume prediction a practically relevant problem for transport operations?
-2. Are hour, weekday, holidays, and weather useful operational predictors?
-3. Which findings would matter most to traffic managers?
-4. Would an interpretable statistical model be useful even if a more complex model achieved slightly better accuracy?
-5. What level of prediction error would be operationally acceptable?
-6. What real-world variables are missing from this dataset?
-7. Is the proposed dashboard/decision-support framework feasible?
-8. What implementation barriers would you expect?
-9. What changes would you recommend to the proposed solution?
-10. What ethical, safety, or governance issues should be considered?
-
-## 12.3 Feedback summary template
-
-```{r}
-expert_feedback_template <- tribble(
-  ~Topic, ~Expert_feedback, ~Change_made_to_project,
-  "Problem relevance", "TO COMPLETE", "TO COMPLETE",
-  "Model practicality", "TO COMPLETE", "TO COMPLETE",
-  "Decision-support framework", "TO COMPLETE", "TO COMPLETE",
-  "Implementation feasibility", "TO COMPLETE", "TO COMPLETE",
-  "Risks / limitations", "TO COMPLETE", "TO COMPLETE"
-)
-
-knitr::kable(expert_feedback_template)
-```
-
-## 12.4 Evidence
-
-Insert or reference the permitted evidence here:
-
-- meeting minutes,
-- email,
-- feedback form,
-- screenshot,
-- interview summary.
 
 # 13. Task 12 — Final Consultancy Recommendations
 
